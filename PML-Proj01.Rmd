@@ -1,0 +1,147 @@
+---
+title: "Predict Activities with Sensor Data"
+author: "MOOCJJC"
+date: "January 22, 2017"
+output:
+  html_document: default
+  pdf_document:
+    fig_caption: yes
+  word_document: default
+csl: 3d-printing-in-medicine.csl
+---
+
+```{r, echo=FALSE}
+library(knitr)
+opts_chunk$set(tidy.opts=list(width.cutoff=80),tidy=TRUE)
+
+```
+
+### Summary
+
+This a coursework project to create a model for predictiong of the type of activities by using collected sensor data and other variables. In each training data point, the activity type has been specified, therefore it is a supervised learning problem. The training data set will be partitioned into 60 to 40 ratio for a training set and a validation set. The training set will be use to create the model and the validation set will provide an insight on how well the model works. If necessary, the validation set will also be used to optimized the parameters in the models.
+
+There is no activity type in the test dataset. The best model will be used to predict the activity types in the twenty test data, and the results will be submitted through coursera website.
+
+### Exploratory Data Study
+
+Below command load the raw training and testing data into the system:
+```{r, message=FALSE}
+library(caret); library(rpart); library(rpart.plot); library(randomForest)
+training_raw <- read.csv("pml-training.csv", na.string = c("NA", "", "#DIV/0!"))
+testing_raw <- read.csv("pml-testing.csv", na.string = c("NA", "", "#DIV/0!"))
+```
+
+We used ```str()``` function in console to look at the data first (the results were shown in this manuscript because of limited space). It was found that there are many variables that are without data (occupied by NA). In next steps, we will tidy up the datasets and separate the training data for model builing and validation.
+
+### Data Cleaning
+
+#### Remove predictors with more than 50% `NA`
+
+Most likely the predictors have many ```NA``` values cannot contribute the prediction well, so removing them may simplify the model as well as the computation. The selection of 50% is kind of arbitrary at this moment. There may be some mechansim for choosing this threshold. The following commands selected the variables with less than 50% ```NA``` as predictors for the model building. 
+```{r}
+idx_select <- integer()
+for (i in 1:length(training_raw)) {
+        if (sum(is.na(training_raw[,i])) / nrow(training_raw) <= 0.5) {
+                idx_select <- c(idx_select,i)
+        }
+}
+
+training_raw1 <- training_raw[,idx_select]
+```
+
+#### Remove predictors with near Zero variance
+
+It is also a common practice to remove the variables with zero or near zero variances because they are more like a constant and contribute little to the models. But we can expect there is not many of this kind variables for sensor data.
+```{r}
+idx_n0var <- nearZeroVar(training_raw1, saveMetrics = TRUE)
+training_raw2 <- training_raw1[, idx_n0var$nzv == FALSE]
+```
+
+#### Remove index column and duplicated timestamp
+
+The first column, sample index, and the text-formatted timestamp was also removed. Please note the timestamp information has already included the other two timestamp columns represented by integers. Intermediate variables are also removed.
+```{r}
+training_clean <- training_raw2[, -which(names(training_raw2) %in% 
+                                                c("X","cvtd_timestamp"))]
+rm(training_raw1)
+rm(training_raw2)
+```
+
+#### Remove unnecessary predictors in testing set
+
+To match the predictors between testing set and training set, the unnecessary predictors in testing set are also removed:
+```{r}
+testing_clean <- testing_raw[, head(names(training_raw),-1)]
+```
+
+### Data Partition for traing set
+
+The following commands separated the raw training set into two parts: one for modeling building, ```training_model```; the other for validation ```val_model``` with 60 to 40 ratio.
+```{r}
+idx_inTrain <- createDataPartition(training_clean$classe, p=0.6, list=FALSE)
+training_model <- training_clean[idx_inTrain,]
+val_model <- training_clean[-idx_inTrain,]
+dim(training_model)
+dim(val_model)
+```
+
+### Prediction Models
+
+#### 1. Decision Trees
+
+```{r}
+set.seed(100)
+treeMod <- rpart(classe ~ ., method = "class", data = training_model)
+treePred <- predict(treeMod, newdata = val_model, type = "class")
+confusionMatrix(treePred,val_model$classe)
+```
+According to an internet post @rpartissue, there is problem when passing "class" mentod to ```train``` function, so ```rpart``` function is used instead.
+
+From the confusionMatrix, we can find that though the overall accuracy is not bad, ```~82%```, there are still a lot of miscategorized prediction with Decision Tree Model for ```val_model```
+
+#### 2. Random Forest
+
+```{r}
+set.seed(101)
+rfMod <- randomForest(classe ~ ., data = training_model)
+rfPred <- predict(rfMod, newdata = val_model, type = "class")
+confusionMatrix(rfPred, val_model$classe)
+```
+The Random Forest Model has an impressive accuracy in the ```val_model``` dataset, ```99.9%```. Because we didn't use the ```val_model``` to optimize the model parameters and the sample sizes for both ```training_model``` and ```val_model``` are not very small, we can expect we will get a good prediction on the test dataset.
+
+#### 3. Generalized Boosted Regression Models
+
+```{r, message=FALSE}
+set.seed(102)
+fitControl <- trainControl(## 10-fold CV
+                           method = "repeatedcv",
+                           number = 10,
+                           ## repeated one time only
+                           repeats = 1)
+gbmMod <- train(classe ~ ., data = training_model, method = "gbm"
+                , verbose = FALSE, trControl = fitControl)
+gbmPred <- predict(gbmMod, newdata = val_model)
+confusionMatrix(gbmPred, val_model$classe)
+```
+The "Generalized Boosted Regression" model also has a very high accuracy, 99.5%. As similar to the "Random Forest" model, we didn't used the ```val_model``` to optimize the model parameters, so we can expect good accuracy of this model in test dataset.
+
+### Predict the results on test set for Quiz
+
+The Random Forest Model was selected for the test dataset for Quiz question submission because it has the best performance among the three models we have used.
+```{r}
+testPredict <- predict(rfMod, testing_clean)
+testPredict
+```
+
+### Conclusion
+
+Three models, "Decision Trees", "Random Forest", and "Generalized Boosted Regression Model", have been used to predict the activity types by using the labeled sensor data. "Random Forest" model has the best performance in the ```val_model``` data (40 % of the training data). The accuracy of "Generalized Boosted Regression" model is just slightly lower than "Random Forest". This may be caused by the randomness of the modeling processes. The significantness of this difference is not discussed in this report.
+
+
+### References
+
+---
+references:
+- id: rpartissue
+  URL: http://stackoverflow.com/questions/27551863/r-caret-package-rpart-constructing-a-classification-tree
+---
